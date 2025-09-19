@@ -1,0 +1,70 @@
+name: Release Chart
+on:
+  push:
+    branches:
+      - '**'
+    paths:
+      - 'Chart.yaml'
+      - 'values.yaml'
+      - 'values.schema.json'
+      - 'templates/**'
+  pull_request:
+    paths:
+      - 'Chart.yaml'
+      - 'values.yaml'
+      - 'values.schema.json'
+      - 'templates/**'
+  workflow_dispatch:
+jobs:
+  release:
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Get chart metadata
+      id: chart_metadata
+      run: |
+        NAME=$(grep '^name:' Chart.yaml | awk '{print $2}')
+        VERSION=$(grep '^version:' Chart.yaml | awk '{print $2}')
+        echo "name=$NAME" >> $GITHUB_OUTPUT
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        
+        # Determine the tag based on event type
+        if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+          # For PRs, use version with PR number as prerelease
+          PR_NUM="${{ github.event.pull_request.number }}"
+          TAG="${VERSION}-pr.${PR_NUM}"
+        elif [[ "${{ github.ref }}" == "refs/heads/dev" ]]; then
+          # For main branch (dev), use chart version
+          TAG="$VERSION"
+        else
+          # For other branches, use version with branch as prerelease
+          BRANCH_NAME=$(echo "${{ github.ref }}" | sed 's/refs\/heads\///')
+          BRANCH_NAME=$(echo "$BRANCH_NAME" | sed 's/\//-/g' | sed 's/_/-/g')
+          # Make it semver compliant: version-branch.sha
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          TAG="${VERSION}-${BRANCH_NAME}.${SHORT_SHA}"
+        fi
+        
+        echo "tag=$TAG" >> $GITHUB_OUTPUT
+        echo "Chart name: $NAME"
+        echo "Chart version: $VERSION"
+        echo "Chart tag: $TAG"
+    
+    - name: Chart | Push
+      uses: appany/helm-oci-chart-releaser@v0.4.2
+      with:
+        name: ${{ steps.chart_metadata.outputs.name }}
+        repository: ${{ github.repository }}
+        tag: ${{ steps.chart_metadata.outputs.tag }}
+        path: .
+        registry: ghcr.io
+        registry_username: ${{ github.actor }}
+        registry_password: ${{ secrets.GITHUB_TOKEN }}
+        update_dependencies: 'true'
